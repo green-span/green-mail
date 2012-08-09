@@ -9,3 +9,6 @@
 #|##############################################################################
 
 ALLVERBOSE = True #true value activates full function logging in all modules
+
+TESTGIT = True
+
