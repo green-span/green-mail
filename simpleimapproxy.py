@@ -42,10 +42,11 @@ class SimpleImapProxyClient(SimpleImapProxy):
     def dataReceived(self, data):
         print "C   P < S: %s" %data
         altered_data = self.alterImapServerMessage(data) 
-        print "C < P  S: %s" %altered_data
+        print "C < P   S: %s" %altered_data
         SimpleImapProxy.dataReceived(self, altered_data)
         
     def alterImapServerMessage(self, data):
+        """Makes alterations to data stream from server to client"""
         
         #Do not tell mail client of IMAP compression capability
         altered_data = data.replace("COMPRESS=DEFLATE","NOTHING=TO=SEE=HERE")
@@ -86,7 +87,19 @@ class SimpleImapProxyServer(SimpleImapProxy):
     def dataReceived(self, data):
         print "C > S: %s" %data
         SimpleImapProxy.dataReceived(self, data)
-    
+
+    def dataReceived(self, data):
+        print "C > P   S: %s" %data
+        altered_data = self.alterImapClientMessage(data) 
+        print "C   P > S: %s" %altered_data
+        SimpleImapProxy.dataReceived(self, altered_data)
+        
+    def alterImapClientMessage(self, data):
+        """Makes alterations to data stream from client to server"""
+        
+        altered_data = data
+        
+        return altered_data    
 
 class SimpleImapProxyServerFactory(Factory):
 
