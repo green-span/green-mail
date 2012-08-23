@@ -148,7 +148,6 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         if match:
             namespace = match.group()[2:-2]
             split = string.split(namespace,'" "',1)
-            print split
             self.peer.root = split[0][1:]
             self.peer.sep = split[1][:-1]
             #add seperator to end if root is not ""
