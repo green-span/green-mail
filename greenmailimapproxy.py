@@ -15,7 +15,6 @@ from twisted.internet.protocol import ClientFactory, Factory, Protocol
 from twisted.python import log
 import string, re
 
-REPLACE_SPECIAL = [("notgmail.com","gmail.com"),("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
 HOST_NAME = 'imap.googlemail.com'
 MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
 MASK = "NOTHING=TO=SEE=HERE"
@@ -24,8 +23,13 @@ GS = "GS"
 APP = "MAIL"
 SEP = "/"
 
+#Special replaces to fix problem of clients that assume knowledge of Gmail imap folders
+FROM_CLIENT_REPLACE_SPECIAL = [("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
+FROM_SERVER_REPLACE_SPECIAL = [("NO [ALREADYEXISTS]","OK [ALREADYEXISTS]"),]
+
 #Client Commands that the proxy needs to know about
 CLIENT_COMMANDS = ['APPEND','CAPABILITY','CHECK','COPY','CREATE','DELETE','EXAMINE','FETCH','GETQUOTAROOT','ID','IDLE','LIST','LOGIN','LSUB','NAMESPACE','NOOP','RENAME','SELECT','STATUS','SUBSCRIBE','UID','UNSUBSCRIBE']
+
 #Commands that need their parameters changed in passing through the proxy
 CHANGE_FIRST_PARAM = ['APPEND','CREATE','DELETE','EXAMINE','GETQUOTAROOT','RENAME','SELECT','STATUS','SUBSCRIBE','UNSUBSCRIBE']
 CHANGE_SECOND_PARAM = ['COPY','RENAME','LIST','LSUB']
@@ -112,7 +116,7 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
                 command == None
             elif command[1] == "FETCH": return line #skip parse of FETCH message lines
         #Parse commands and greenwash accordingly
-        altered_line = line
+        altered_line = self._specialReplace(line)
         prefix = self.peer.root + self.peer.gs + self.peer.sep + self.peer.app + self.peer.sep 
         #NAMESPACE - Get ROOT and SEP from return
         if line[:11].lower() == "* namespace":
@@ -159,6 +163,13 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
             #add seperator to end if root is not ""
             if self.peer.root: self.peer.root += self.peer.sep 
         return
+    
+    def _specialReplace(self,line):
+        """Rewrite on specific server responses"""
+        new_line = line
+        for item in FROM_SERVER_REPLACE_SPECIAL: #each item a tupple of form (SEARCH_STRING,REPLACE_STRING)
+            new_line = new_line.replace(item[0],item[1])
+        return new_line
 
 class GreenMailImapProxyClientFactory(ClientFactory):
 
@@ -259,7 +270,7 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
     def _specialReplace(self,line):
         """Replaces special info that client may "know" about the server - E.G. Gmail box names"""
         new_line = line
-        for item in REPLACE_SPECIAL: #each item a tupple of form (SEARCH_STRING,REPLACE_STRING)
+        for item in FROM_CLIENT_REPLACE_SPECIAL: #each item a tupple of form (SEARCH_STRING,REPLACE_STRING)
             new_line = new_line.replace(item[0],item[1])
         return new_line
     
