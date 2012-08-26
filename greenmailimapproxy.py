@@ -8,20 +8,28 @@
 #|##############################################################################
 
 VERBOSE = True
+DEBUG = True
 
 from twisted.internet import ssl, reactor
 from twisted.internet.protocol import ClientFactory, Factory, Protocol
 from twisted.python import log
 import string, re
 
+REPLACE_SPECIAL = [("notgmail.com","gmail.com"),("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
 HOST_NAME = 'imap.googlemail.com'
 MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
-CAPABILITY_MASK = "NOTHING=TO=SEE=HERE"
+MASK = "NOTHING=TO=SEE=HERE"
 ROOT = ""
 GS = "GS"
 APP = "MAIL"
 SEP = "/"
-CLIENT_COMMANDS = ['LOGIN','SELECT','SUBSCRIBE','EXAMINE','CREATE','DELETE','RENAME','LIST','LSUB','STATUS','COPY','GETQUOTAROOT','APPEND']
+
+#Client Commands that the proxy needs to know about
+CLIENT_COMMANDS = ['APPEND','CAPABILITY','CHECK','COPY','CREATE','DELETE','EXAMINE','FETCH','GETQUOTAROOT','ID','IDLE','LIST','LOGIN','LSUB','NAMESPACE','NOOP','RENAME','SELECT','STATUS','SUBSCRIBE','UID','UNSUBSCRIBE']
+#Commands that need their parameters changed in passing through the proxy
+CHANGE_FIRST_PARAM = ['APPEND','CREATE','DELETE','EXAMINE','GETQUOTAROOT','RENAME','SELECT','STATUS','SUBSCRIBE','UNSUBSCRIBE']
+CHANGE_SECOND_PARAM = ['COPY','RENAME','LIST','LSUB']
+
 
 def trimContainer(a_string):
     """Removes quotes,braces,parens, or brackets from both sides of a string"""
@@ -89,44 +97,42 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
-        #Check for end of any commands or for a FETCH still in progress
+        #Check for end of any commands in progress or for an ongoing FETCH to ignore message data
         command = self.peer.command
         if command:
-            length = len(self.peer.command[0])+len(self.peer.command[1]) + 4
-            if command and line[:length].upper() == (self.peer.command[0] + " OK " + self.peer.command[1]):
+            length = len(self.peer.command[0])
+            if command and line[:length +3].upper() == (self.peer.command[0] + " OK"):
+                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
                 command == None
-            elif command and line[:length].upper() == (self.peer.command[0] + " NO " + self.peer.command[1]):
-                    command == None
-            elif command and line[:length + 1].upper() == (self.peer.command[0] + " BAD " + self.peer.command[1]):
+            elif command and line[:length + 3].upper() == (self.peer.command[0] + " NO"):
+                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
                 command == None
-            elif command[1] == "FETCH": return line #skip parse of lines durring FETCH Command
+            elif command and line[:length + 4].upper() == (self.peer.command[0] + " BAD"):
+                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
+                command == None
+            elif command[1] == "FETCH": return line #skip parse of FETCH message lines
         #Parse commands and greenwash accordingly
         altered_line = line
         prefix = self.peer.root + self.peer.gs + self.peer.sep + self.peer.app + self.peer.sep 
-        #NAMESPACE - Get BOX ROOT and SEP from return
-        #S: * NAMESPACE (("" "/")) NIL NIL
+        #NAMESPACE - Get ROOT and SEP from return
         if line[:11].lower() == "* namespace":
             self.parseRootAndSep(line)
-        #CAPABILITY - Mask those in our unwanted list
+        #CAPABILITY - Mask capabilities we do not want to support (at least for now)
         elif line[:12].lower() == "* capability":
             for capability in MASKED_CAPABILITIES_LIST:
-                altered_line = re.sub("(?i)%s"%capability, CAPABILITY_MASK, altered_line)
-        #LIST and LSUB
+                altered_line = re.sub("(?i)%s"%capability, MASK, altered_line)
+        #LIST and LSUB - change response box name's
         elif ["* lsub", "* list"].count(line[:6].lower()): #if list or lsub return data
             #get box name and sep
             box_name = self.getBoxNameFromList(line)
-            #if box is above our view - kill line
             if box_name[:len(prefix)] != prefix:
                 altered_line = ""
             else:
                 new_name = box_name.replace(prefix,"",1)
                 altered_line = line.replace(box_name,new_name)
-        #QUOTAROOT and STATUS Responses
+        #QUOTAROOT and STATUS  - change response box name's
         elif ["* quotar", "* status"].count(line[:8].lower()):
             altered_line = line.replace(prefix,"")
-        #SELECT
-        #S: A812 OK [READ-WRITE] GS/MAIL/INBOX selected. (Success)
-        #Should have a FETCH mode that ignores parsing
         #Return altered
         return altered_line   
         
@@ -201,16 +207,20 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
         #skip parse durring APPEND command
-        if self.command and self.command[1] == "APPEND": return line
+        if self.command and self.command[1].upper() == "APPEND": return line
         #Parse line and green wash accordingly
-        altered_line = line
-        line_parts = line.split(' ')
+        altered_line = self._specialReplace(line)
+        line_parts = self._specialSplit(altered_line)
+        print "\nPROXY INTERNAL: <COMMAND PARTS = %s>\n" % line_parts
         prefix = self.root +self.gs + self.sep + self.app
         #identify command
         command = None
         if len(line_parts) > 1 and CLIENT_COMMANDS.count(line_parts[1].upper()):
             command = line_parts[1].upper()
+            #Swap UID command for sub-command
+            if command == "UID": command = line_parts[2].upper()            
             self.command = [line_parts[0].upper(), command] #record command number and command
+            if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND START>\n" % self.command
         #Commands needing greenwash of first argument
         #C: A142 SELECT INBOX
         #C: A932 EXAMINE INBOX
@@ -220,24 +230,24 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         #C: A003 GETQUOTAROOT INBOX
         #C: A003 APPEND INBOX (\Seen) {310}
         #C: A683 RENAME INBOX/SUBBOX INBOX/SPECIAL
-        if ['SELECT','SUBSCRIBE','EXAMINE','CREATE','DELETE','STATUS','GETQUOTAROOT','APPEND','RENAME'].count(command):
+        if CHANGE_FIRST_PARAM.count(command):
             box_name = trimContainer(line_parts[2])
             altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
-        #Commands needing greenwash of second argument (Note "RENAM" does both first and second)
-        if ['COPY','RENAME'].count(command):
+        #Commands needing greenwash of second argument (Note "RENAME" does both first and second parameters)
+        if CHANGE_SECOND_PARAM.count(command):
             box_name = trimContainer(line_parts[3])
-            altered_line = altered_line.replace(box_name,prefix + self.sep + mailbox_name,1)
-        #LIST and LSUB also have a context parameter that should be greenwashed
+            altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
+        #LIST and LSUB also have a context parameter (line_parts[2]) that maybe should be greenwashed
         #but this must be handles a little differently than above, as it is often blank
-        if ['LIST','LSUB'].count(command):
-            context = trimContainer(line_parts[2])
-            if context:
-                altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
-            else: #blank context
-                quotes = line_parts[2]
-                altered_line = altered_line.replace(quotes,quotes[:1] + prefix + quotes[-1:],1)
+        #if ['LIST','LSUB'].count(command):
+        #    context = trimContainer(line_parts[2])
+        #    if context:
+        #        altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
+        #    else: #blank context
+        #        quotes = line_parts[2]
+        #        altered_line = altered_line.replace(quotes,quotes[:1] + prefix + quotes[-1:],1)
         #LOGIN get APP info and remove it from login string for pass to server
-        #C: a001 LOGIN "whysean+voip@gmail.com" "Sean'sBestPassword"
+        #C: a001 LOGIN "whysean+voip@gmail.com" "NotMyRealPaswword"
         if command == "LOGIN":
             match = re.search(r'\+.*@',line)
             if match:
@@ -245,7 +255,39 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
                 altered_line = altered_line.replace(match.group()[:-1],"",1)
         #Return possibly altered client data line
         return altered_line
-
+    
+    def _specialReplace(self,line):
+        """Replaces special info that client may "know" about the server - E.G. Gmail box names"""
+        new_line = line
+        for item in REPLACE_SPECIAL: #each item a tupple of form (SEARCH_STRING,REPLACE_STRING)
+            new_line = new_line.replace(item[0],item[1])
+        return new_line
+    
+    def _specialSplit(self,line):
+        """Splits string into tuple at spaces, excepting spaces in quoted text"""
+        parts = []
+        current = ""
+        quotes = ""
+        for character in line:
+            if character == '\r':
+                parts.append(current)
+                current = ""
+            if quotes:
+                current += character                
+                if character == quotes:
+                    quotes = ""
+                    parts.append(current)
+                    current = ""
+            else:
+                if character != " ":
+                    current += character
+                elif current:
+                    parts.append(current)
+                    current = ""
+                if ['"',"'"].count(character): quotes = character
+        if current: parts.append(current)
+        return parts
+        
 
 class GreenMailImapProxyServerFactory(Factory):
 
