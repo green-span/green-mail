@@ -15,17 +15,19 @@ from twisted.internet.protocol import ClientFactory, Factory, Protocol
 from twisted.python import log
 import string, re
 
-HOST_NAME = 'imap.googlemail.com'
-MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
-MASK = "NOTHING=TO=SEE=HERE"
-ROOT = ""
-GS = "GS"
-APP = "MAIL"
-SEP = "/"
+HOST_NAME = 'imap.googlemail.com' #Assumed hostname (later versions will discover from login or have on file)
+ROOT = "" #Assumed root of user mailboxes until otherwise discovered
+SEP = "/" #Assumed mailbox name seperator until otherwise discovered
+GS = "GS" #Top level box name
+APP = "MAIL" #Default App if none specified
 
-#Special replaces to fix problem of clients that assume knowledge of Gmail imap folders
+#Replaces that fix problem of client(s) (Thunderbird) assuming knowledge of Gmail imap folders
 FROM_CLIENT_REPLACE_SPECIAL = [("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
 FROM_SERVER_REPLACE_SPECIAL = [("NO [ALREADYEXISTS]","OK [ALREADYEXISTS]"),]
+
+#Capabilities not currently supported will be replaces with MASK
+MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
+MASK = "NOTHING=TO=SEE=HERE"
 
 #Client Commands that the proxy needs to know about
 CLIENT_COMMANDS = ['APPEND','CAPABILITY','CHECK','COPY','CREATE','DELETE','EXAMINE','FETCH','GETQUOTAROOT','ID','IDLE','LIST','LOGIN','LSUB','NAMESPACE','NOOP','RENAME','SELECT','STATUS','SUBSCRIBE','UID','UNSUBSCRIBE']
@@ -33,6 +35,9 @@ CLIENT_COMMANDS = ['APPEND','CAPABILITY','CHECK','COPY','CREATE','DELETE','EXAMI
 #Commands that need their parameters changed in passing through the proxy
 CHANGE_FIRST_PARAM = ['APPEND','CREATE','DELETE','EXAMINE','GETQUOTAROOT','RENAME','SELECT','STATUS','SUBSCRIBE','UNSUBSCRIBE']
 CHANGE_SECOND_PARAM = ['COPY','RENAME','LIST','LSUB']
+#LIST and LSUB also have a first "context" parameter that maybe should be greenwashed
+#but it is often blank and seems to have different meanings based on second parameter
+#this is something to look at again later...
 
 
 def trimContainer(a_string):
@@ -217,7 +222,7 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
     
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
-        #skip parse durring APPEND command
+        #skip parse of message lines durring APPEND command
         if self.command and self.command[1].upper() == "APPEND": return line
         #Parse line and green wash accordingly
         altered_line = self._specialReplace(line)
@@ -233,14 +238,6 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
             self.command = [line_parts[0].upper(), command] #record command number and command
             if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND START>\n" % self.command
         #Commands needing greenwash of first argument
-        #C: A142 SELECT INBOX
-        #C: A932 EXAMINE INBOX
-        #C: A004 CREATE INBOX/SUBBOX
-        #C: A683 DELETE INBOX
-        #C: A042 STATUS INBOX (UIDNEXT MESSAGES)
-        #C: A003 GETQUOTAROOT INBOX
-        #C: A003 APPEND INBOX (\Seen) {310}
-        #C: A683 RENAME INBOX/SUBBOX INBOX/SPECIAL
         if CHANGE_FIRST_PARAM.count(command):
             box_name = trimContainer(line_parts[2])
             altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
@@ -248,17 +245,7 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         if CHANGE_SECOND_PARAM.count(command):
             box_name = trimContainer(line_parts[3])
             altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
-        #LIST and LSUB also have a context parameter (line_parts[2]) that maybe should be greenwashed
-        #but this must be handles a little differently than above, as it is often blank
-        #if ['LIST','LSUB'].count(command):
-        #    context = trimContainer(line_parts[2])
-        #    if context:
-        #        altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
-        #    else: #blank context
-        #        quotes = line_parts[2]
-        #        altered_line = altered_line.replace(quotes,quotes[:1] + prefix + quotes[-1:],1)
         #LOGIN get APP info and remove it from login string for pass to server
-        #C: a001 LOGIN "whysean+voip@gmail.com" "NotMyRealPaswword"
         if command == "LOGIN":
             match = re.search(r'\+.*@',line)
             if match:
@@ -280,7 +267,7 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         current = ""
         quotes = ""
         for character in line:
-            if character == '\r':
+            if character == '\r': #carriage retun
                 parts.append(current)
                 current = ""
             if quotes:
