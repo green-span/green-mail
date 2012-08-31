@@ -88,6 +88,8 @@ class GreenMailImapProxy(Protocol):
         return altered_line   
 
 class GreenMailImapProxyClient(GreenMailImapProxy):
+    """This half of the proxy recieves data from an IMAP server and sometimes alters it
+    before passing it along to the real connected client."""
 
     def __init__(self):
         self.fragment = ""
@@ -193,6 +195,8 @@ class GreenMailImapProxyClientFactory(ClientFactory):
 
 
 class GreenMailImapProxyServer(GreenMailImapProxy):
+    """This half of the proxy recieves data from an IMAP client and sometimes alters it
+        before passing it along to the real connected server."""    
 
     clientFactory = GreenMailImapProxyClientFactory
     
