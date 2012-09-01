@@ -142,17 +142,18 @@ class GreenMailSmtpProxyServer(GreenMailSmtpProxy):
         if len(line) >= 4 and line[:4].upper() == "DATA":
             self.sending = True
             if DEBUG: print "PROXY INTERNAL: <RECIPIENTS=%s>"%self.recipients
-        elif len(line) >= 1 and line[:1] == ".":
+        elif self.stripReturn(line) == ".":
             self.sending = False
         if not self.sending:
             if len(line) >= 8 and line[:8].upper() == "RCPT TO:":
-                self.recipients.append(line[8:])
+                self.recipients.append(self.stripReturn(line[8:]))
         return altered_line
     
-    def processRecipients(self,to_line):
-        """Pass recipient list off to green-light to record as user contacted"""
-        if DEBUG: print "PROXY INTERNAL: <TO_LINE = %s>" % to_line 
-        pass    
+    def stripReturn(self,line):
+        """Strip \r character if it exists at end of line"""
+        if line[-1:] == "\r":
+            return line[:-1]
+        return line
 
 class GreenMailSmtpProxyServerFactory(Factory):
 
