@@ -26,7 +26,6 @@ DEBUG = 0
 
 class IMAPDeliveryAgentProtocol(imap4.IMAP4Client):
 
-    
     def serverGreeting(self, caps):
         if DEBUG:
             print "Greetings and Salutations!"        
@@ -103,7 +102,6 @@ if __name__ == "__main__":
     host = sys.argv[1]
     port = int(sys.argv[2])
     user = sys.argv[2]
-    user = "green.mail.tester"
     password = getpass.getpass("Password: ")
 
     factory = IMAPDeliveryAgentFactory(user, password)
