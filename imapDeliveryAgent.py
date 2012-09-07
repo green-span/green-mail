@@ -101,7 +101,7 @@ if __name__ == "__main__":
         
     host = sys.argv[1]
     port = int(sys.argv[2])
-    user = sys.argv[2]
+    user = sys.argv[3]
     password = getpass.getpass("Password: ")
 
     factory = IMAPDeliveryAgentFactory(user, password)
