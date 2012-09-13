@@ -4,13 +4,11 @@
 # usage: imapDeliverAgent.py host port username
 #
 #
-# written by Morgan Baron 9/2012 
+# written by morgan baron 9/2012 
 #
 #
 # TODO:
-#  Fail gracefully for authentication failure
-#  Base destination mailbox on +string
-#  Hooks for Green-Light authentication
+#
 #
 ###############################################
 

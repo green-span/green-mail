@@ -3,7 +3,7 @@
 # imapidleclient.py
 # usage: imapidleclient.py host port username
 #
-# author: Morgan Baron 9/2012 
+# author: morgan baron 9/2012 
 #
 #  description:
 #   will notify when new messages arrive.
