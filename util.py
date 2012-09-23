@@ -52,8 +52,7 @@ def rfc2822():
 def validateAddress(addr):
     try:
         parsed = rfc2822().parseString(addr)
-        if parsed is not None:
-            return True
+        return parsed is not None
     except:
         return False
 
