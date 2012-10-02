@@ -10,6 +10,7 @@
 #   proof of conecpt, need lots of love
 #
 #  requires python version > 2.4 for inlinecallbacks
+#  requires hackey imap4.py
 #
 ###############################################
 
