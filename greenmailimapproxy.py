@@ -7,8 +7,7 @@
 #|Author(s): Sean Hastings,
 #|##############################################################################
 
-VERBOSE = True
-DEBUG = True
+VERBOSE = True #See the Proxies conversation with Client and Server
 
 from twisted.internet import ssl, reactor
 from twisted.internet.protocol import ClientFactory, Factory, Protocol
@@ -18,16 +17,19 @@ import string, re
 HOST_NAME = 'imap.googlemail.com' #Assumed hostname (later versions will discover from login or have on file)
 ROOT = "" #Assumed root of user mailboxes until otherwise discovered
 SEP = "/" #Assumed mailbox name seperator until otherwise discovered
-GS = "GS" #Top level box name
+GS = "+" #Top level box name
 APP = "MAIL" #Default App if none specified
 
-#Replaces that fix problem of client(s) (Thunderbird) assuming knowledge of Gmail imap folders
+#Hacks that fix problem of client(s) (Thunderbird) assuming knowledge of Gmail imap folders
 FROM_CLIENT_REPLACE_SPECIAL = [("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
 FROM_SERVER_REPLACE_SPECIAL = [("NO [ALREADYEXISTS]","OK [ALREADYEXISTS]"),]
 
 #Capabilities not currently supported will be replaces with MASK
 MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
 MASK = "NOTHING=TO=SEE=HERE"
+
+#Sensitive data (like user password) will be masked in VERBOSE printout
+PASS_MASK = "XXXXXXXX"
 
 #Client Commands that the proxy needs to know about
 CLIENT_COMMANDS = ['APPEND','CAPABILITY','CHECK','COPY','CREATE','DELETE','EXAMINE','FETCH','GETQUOTAROOT','ID','IDLE','LIST','LOGIN','LSUB','NAMESPACE','NOOP','RENAME','SELECT','STATUS','SUBSCRIBE','UID','UNSUBSCRIBE']
@@ -39,6 +41,8 @@ CHANGE_SECOND_PARAM = ['COPY','RENAME','LIST','LSUB']
 #but it is often blank and seems to have different meanings based on second parameter
 #this is something to look at again later...
 
+#Command tag suffix used when slipping in an extra command from client
+SNEAK_COMMAND_TAG_SUFFIX = "A"
 
 def trimContainer(a_string):
     """Removes quotes,braces,parens, or brackets from both sides of a string"""
@@ -93,6 +97,7 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
 
     def __init__(self):
         self.fragment = ""
+        self.logged_in = False
 
     def connectionMade(self):
         """Establishes internal proxy connection and start data flow once remote server connects"""
@@ -112,16 +117,21 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         command = self.peer.command
         if command:
             length = len(self.peer.command[0])
-            if command and line[:length +3].upper() == (self.peer.command[0] + " OK"):
-                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
+            if line[:length + 3].upper() == (self.peer.command[0] + " OK"):
+                #Record successful login state
+                if command[1] == "LOGIN" : self.logged_in = True
                 command == None
-            elif command and line[:length + 3].upper() == (self.peer.command[0] + " NO"):
-                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
+            elif line[:length + 3].upper() == (self.peer.command[0] + " NO"):
                 command == None
-            elif command and line[:length + 4].upper() == (self.peer.command[0] + " BAD"):
-                if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND END>\n" % command
+            elif line[:length + 4].upper() == (self.peer.command[0] + " BAD"):
                 command == None
-            elif command[1] == "FETCH": return line #skip parse of FETCH message lines
+            elif command[1] == "FETCH": return line #skips parsing of FETCH message lines
+        #Hide real server return data from inserted commands unknown to real client
+        sneak_tag = self.peer.sneak_command_tag
+        if sneak_tag:
+            length = len(sneak_tag)
+            if line[:length + 1] == (sneak_tag + " "):
+                return ""
         #Parse commands and greenwash accordingly
         altered_line = self._specialReplace(line)
         prefix = self.peer.root + self.peer.gs + self.peer.sep + self.peer.app + self.peer.sep 
@@ -144,7 +154,7 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         #QUOTAROOT and STATUS  - change response box name's
         elif ["* quotar", "* status"].count(line[:8].lower()):
             altered_line = line.replace(prefix,"")
-        #Return altered
+        #Return altered data line
         return altered_line   
         
     def getBoxNameFromList(self, line):
@@ -208,6 +218,8 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         self.gs = GS
         self.app = APP
         self.sep = SEP
+        self.sneak_command_tag = None
+        self.inbox_created = False
 
     def connectionMade(self):
         """Pauses data flow until remote server connects, sets up for future data flow"""
@@ -218,11 +230,18 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
 
     def dataReceived(self, data):
         """Overide for handling data sent from client"""
-        if VERBOSE: print "C > P   S: %s" % data
         altered_data = self.handleData(data) 
+        if VERBOSE: print "C > P   S: %s" % self.hideSensitive(data)
         if altered_data:
-            if VERBOSE: print "C   P > S: %s" %  altered_data
-            GreenMailImapProxy.dataReceived(self, altered_data)        
+            if VERBOSE: print "C   P > S: %s" %  self.hideSensitive(altered_data)
+            GreenMailImapProxy.dataReceived(self, altered_data)
+            
+    def hideSensitive(self, data):
+        """Replaces user password data and such with PASS_MASK"""
+        if self.command and self.command[1] == "LOGIN":
+            return re.sub('"\S*"','"' + PASS_MASK[::-1] + '"',data[::-1],1)[::-1]
+        return data
+            
     
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
@@ -231,7 +250,6 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         #Parse line and green wash accordingly
         altered_line = self._specialReplace(line)
         line_parts = self._specialSplit(altered_line)
-        print "\nPROXY INTERNAL: <COMMAND PARTS = %s>\n" % line_parts
         prefix = self.root +self.gs + self.sep + self.app
         #identify command
         command = None
@@ -240,7 +258,6 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
             #Swap UID command for sub-command
             if command == "UID": command = line_parts[2].upper()            
             self.command = [line_parts[0].upper(), command] #record command number and command
-            if DEBUG: print "\nPROXY INTERNAL: <%s COMMAND START>\n" % self.command
         #Commands needing greenwash of first argument
         if CHANGE_FIRST_PARAM.count(command):
             box_name = trimContainer(line_parts[2])
@@ -249,12 +266,17 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         if CHANGE_SECOND_PARAM.count(command):
             box_name = trimContainer(line_parts[3])
             altered_line = altered_line.replace(box_name,prefix + self.sep + box_name,1)
-        #LOGIN get APP info and remove it from login string for pass to server
+        #LOGIN get APP info, remove it from login string sent to real server
         if command == "LOGIN":
             match = re.search(r'\+.*@',line)
             if match:
                 self.app = match.group()[1:-1].upper()
                 altered_line = altered_line.replace(match.group()[:-1],"",1)
+        #Sneak in command to try to create INBOX for app once logged in
+        if command and self.peer.logged_in and not self.inbox_created:
+            self.sneak_command_tag = line_parts[0] + SNEAK_COMMAND_TAG_SUFFIX
+            altered_line = self.sneak_command_tag + ' CREATE "' + prefix + self.sep + 'INBOX"' + '\r\n' + altered_line
+            self.inbox_created = True
         #Return possibly altered client data line
         return altered_line
     
