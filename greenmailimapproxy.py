@@ -7,14 +7,16 @@
 #|Author(s): Sean Hastings,
 #|##############################################################################
 
-VERBOSE = True #See the Proxies conversation with Client and Server
-
 from twisted.internet import ssl, reactor
 from twisted.internet.protocol import ClientFactory, Factory, Protocol
 from twisted.python import log
 import string, re
 
-HOST_NAME = 'imap.googlemail.com' #Assumed hostname (later versions will discover from login or have on file)
+#Default connection parameters
+HOST = 'imap.googlemail.com'
+PORT = 993
+
+#Default IMAP folder structure
 ROOT = "" #Assumed root of user mailboxes until otherwise discovered
 SEP = "/" #Assumed mailbox name seperator until otherwise discovered
 GS = "+" #Top level box name
@@ -24,11 +26,11 @@ APP = "MAIL" #Default App if none specified
 FROM_CLIENT_REPLACE_SPECIAL = [("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
 FROM_SERVER_REPLACE_SPECIAL = [("NO [ALREADYEXISTS]","OK [ALREADYEXISTS]"),]
 
-#Capabilities not currently supported will be replaces with MASK
+#Capabilities not currently supported will be replaced with MASK
 MASKED_CAPABILITIES_LIST = ['XLIST','COMPRESS=DEFLATE']
 MASK = "NOTHING=TO=SEE=HERE"
 
-#Sensitive data (like user password) will be masked in VERBOSE printout
+#Sensitive data (like user password) will be masked in _VERBOSE printout
 PASS_MASK = "XXXXXXXX"
 
 #Client Commands that the proxy needs to know about
@@ -105,10 +107,10 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         self.peer.transport.resumeProducing()
 
     def dataReceived(self, data):
-        if VERBOSE: print "C   P < S: %s" % data
+        if _VERBOSE: print "C   P < S: %s" % data
         altered_data = self.handleData(data)
         if altered_data:
-            if VERBOSE: print "C < P   S: %s" % altered_data
+            if _VERBOSE: print "C < P   S: %s" % altered_data
             GreenMailImapProxy.dataReceived(self, altered_data)
         
     def parseDataLine(self, line):
@@ -231,9 +233,9 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
     def dataReceived(self, data):
         """Overide for handling data sent from client"""
         altered_data = self.handleData(data) 
-        if VERBOSE: print "C > P   S: %s" % self.hideSensitive(data)
+        if _VERBOSE: print "C > P   S: %s" % self.hideSensitive(data)
         if altered_data:
-            if VERBOSE: print "C   P > S: %s" %  self.hideSensitive(altered_data)
+            if _VERBOSE: print "C   P > S: %s" %  self.hideSensitive(altered_data)
             GreenMailImapProxy.dataReceived(self, altered_data)
             
     def hideSensitive(self, data):
@@ -321,11 +323,40 @@ class GreenMailImapProxyServerFactory(Factory):
         self.host = host
         self.port = port
 
+
 #Execute from shell
-if __name__ == "__main__":
-    factory = GreenMailImapProxyServerFactory(HOST_NAME,993)
-    reactor.listenSSL(993, factory, ssl.DefaultOpenSSLContextFactory('ssl/server.key', 'ssl/server.crt'))
+import sys, getopt
+
+def main(argv):
+    host = HOST
+    port = PORT
+    global _VERBOSE
+
+    try:                                
+        opts, args = getopt.getopt(argv, "hvH:P:", ["help", "verbose", "host=", "port="])
+    except getopt.GetoptError:          
+        usage(sys.argv[0])                         
+        sys.exit(2)                     
+    for opt, arg in opts:
+        if opt in ("-h", "--help"):
+            usage(sys.argv[0])
+            sys.exit()
+        elif opt in ("-v", "--verbose"):
+            _VERBOSE = True
+        elif opt in ("-H", "--host"):
+            host = arg
+        elif opt in ("-P", "--port"):
+            port = arg
+
+    factory = GreenMailImapProxyServerFactory(host,port)
+    reactor.listenSSL(port, factory, ssl.DefaultOpenSSLContextFactory('ssl/server.key', 'ssl/server.crt'))
     #SSL key and self signed cert generated following instructions at https://help.ubuntu.com/10.04/serverguide/certificates-and-security.html
     print "Proxy Started"
     reactor.run()
     print "Proxy Stopped"
+
+def usage(command):
+    print "usage: %s [-h|--help] [-v|--verbose] [-H=|--host=<host_name>] [-P=|--port=<port>]" % command
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
