@@ -28,7 +28,7 @@ CHANGE_SECOND_PARAM = ['COPY','RENAME','LIST','LSUB']
 #this is something to look at again later...
 
 
-class GreenMailSmtpProxy(Protocol):
+class SmtpProxy(Protocol):
 
     noisy = True
     peer = None
@@ -69,7 +69,7 @@ class GreenMailSmtpProxy(Protocol):
         altered_line = line
         return altered_line   
 
-class GreenMailSmtpProxyClient(GreenMailSmtpProxy):
+class SmtpProxyClient(SmtpProxy):
     """This half of the proxy recieves data from an IMAP server and sometimes alters it
     before passing it along to the real connected client."""
 
@@ -86,7 +86,7 @@ class GreenMailSmtpProxyClient(GreenMailSmtpProxy):
         altered_data = self.handleData(data)
         if altered_data:
             if VERBOSE: print "C < P   S: %s" % altered_data
-            GreenMailSmtpProxy.dataReceived(self, altered_data)
+            SmtpProxy.dataReceived(self, altered_data)
         
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
@@ -94,9 +94,9 @@ class GreenMailSmtpProxyClient(GreenMailSmtpProxy):
         #Return altered
         return altered_line   
           
-class GreenMailSmtpProxyClientFactory(ClientFactory):
+class SmtpProxyClientFactory(ClientFactory):
 
-    protocol = GreenMailSmtpProxyClient
+    protocol = SmtpProxyClient
 
     def setServer(self, server):
         self.server = server
@@ -110,11 +110,11 @@ class GreenMailSmtpProxyClientFactory(ClientFactory):
         self.server.transport.loseConnection()
 
 
-class GreenMailSmtpProxyServer(GreenMailSmtpProxy):
+class SmtpProxyServer(SmtpProxy):
     """This half of the proxy recieves data from a client and sometimes alters it
         before passing it along to the real connected server."""    
 
-    clientFactory = GreenMailSmtpProxyClientFactory
+    clientFactory = SmtpProxyClientFactory
     
     def __init__(self):
         self.fragment = ""
@@ -134,7 +134,7 @@ class GreenMailSmtpProxyServer(GreenMailSmtpProxy):
         altered_data = self.handleData(data) 
         if altered_data:
             if VERBOSE: print "C   P > S: %s" %  altered_data
-            GreenMailSmtpProxy.dataReceived(self, altered_data)        
+            SmtpProxy.dataReceived(self, altered_data)        
     
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
@@ -155,9 +155,9 @@ class GreenMailSmtpProxyServer(GreenMailSmtpProxy):
             return line[:-1]
         return line
 
-class GreenMailSmtpProxyServerFactory(Factory):
+class SmtpProxyServerFactory(Factory):
 
-    protocol = GreenMailSmtpProxyServer
+    protocol = SmtpProxyServer
 
     def __init__(self, host, port):
         self.host = host
@@ -165,7 +165,7 @@ class GreenMailSmtpProxyServerFactory(Factory):
 
 #Execute from shell
 if __name__ == "__main__":
-    factory = GreenMailSmtpProxyServerFactory(HOST_NAME,465)
+    factory = SmtpProxyServerFactory(HOST_NAME,465)
     reactor.listenSSL(465, factory, ssl.DefaultOpenSSLContextFactory('ssl/server.key', 'ssl/server.crt'))
     #SSL key and self signed cert generated following instructions at https://help.ubuntu.com/10.04/serverguide/certificates-and-security.html
     print "Proxy Started"

@@ -7,10 +7,15 @@
 #|Author(s): Sean Hastings,
 #|##############################################################################
 
+""" IMAP proxy designed to limit a green-span APP's view of the users IMAP folders to
+show its own virtual INBOX that is actually located at: "/+/APP/INBOX"
+"""
+
 from twisted.internet import ssl, reactor
 from twisted.internet.protocol import ClientFactory, Factory, Protocol
 from twisted.python import log
 import string, re
+import miscglobals
 
 #Default connection parameters
 HOST = 'imap.googlemail.com'
@@ -19,8 +24,8 @@ PORT = 993
 #Default IMAP folder structure
 ROOT = "" #Assumed root of user mailboxes until otherwise discovered
 SEP = "/" #Assumed mailbox name seperator until otherwise discovered
-GS = "+" #Top level box name
 APP = "MAIL" #Default App if none specified
+GS =  miscglobals.GREEN_MAIL_ROOT
 
 #Hacks that fix problem of client(s) (Thunderbird) assuming knowledge of Gmail imap folders
 FROM_CLIENT_REPLACE_SPECIAL = [("[Gmail]^^",""),("[Gmail]^",""),("[Gmail]","")]
@@ -52,7 +57,7 @@ def trimContainer(a_string):
         return a_string[1:-1]
     return a_string
 
-class GreenMailImapProxy(Protocol):
+class ImapProxy(Protocol):
 
     noisy = True
     peer = None
@@ -93,7 +98,7 @@ class GreenMailImapProxy(Protocol):
         altered_line = line
         return altered_line   
 
-class GreenMailImapProxyClient(GreenMailImapProxy):
+class ImapProxyClient(ImapProxy):
     """This half of the proxy recieves data from an IMAP server and sometimes alters it
     before passing it along to the real connected client."""
 
@@ -111,7 +116,7 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
         altered_data = self.handleData(data)
         if altered_data:
             if _VERBOSE: print "C < P   S: %s" % altered_data
-            GreenMailImapProxy.dataReceived(self, altered_data)
+            ImapProxy.dataReceived(self, altered_data)
         
     def parseDataLine(self, line):
         """Parse and sometimes alter each line of data"""
@@ -190,9 +195,9 @@ class GreenMailImapProxyClient(GreenMailImapProxy):
             new_line = new_line.replace(item[0],item[1])
         return new_line
 
-class GreenMailImapProxyClientFactory(ClientFactory):
+class ImapProxyClientFactory(ClientFactory):
 
-    protocol = GreenMailImapProxyClient
+    protocol = ImapProxyClient
 
     def setServer(self, server):
         self.server = server
@@ -206,11 +211,11 @@ class GreenMailImapProxyClientFactory(ClientFactory):
         self.server.transport.loseConnection()
 
 
-class GreenMailImapProxyServer(GreenMailImapProxy):
+class ImapProxyServer(ImapProxy):
     """This half of the proxy recieves data from an IMAP client and sometimes alters it
         before passing it along to the real connected server."""    
 
-    clientFactory = GreenMailImapProxyClientFactory
+    clientFactory = ImapProxyClientFactory
     
     def __init__(self):
         self.fragment = ""
@@ -236,7 +241,7 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         if _VERBOSE: print "C > P   S: %s" % self.hideSensitive(data)
         if altered_data:
             if _VERBOSE: print "C   P > S: %s" %  self.hideSensitive(altered_data)
-            GreenMailImapProxy.dataReceived(self, altered_data)
+            ImapProxy.dataReceived(self, altered_data)
             
     def hideSensitive(self, data):
         """Replaces user password data and such with PASS_MASK"""
@@ -315,9 +320,9 @@ class GreenMailImapProxyServer(GreenMailImapProxy):
         return parts
         
 
-class GreenMailImapProxyServerFactory(Factory):
+class ImapProxyServerFactory(Factory):
 
-    protocol = GreenMailImapProxyServer
+    protocol = ImapProxyServer
 
     def __init__(self, host, port):
         self.host = host
@@ -331,6 +336,7 @@ def main(argv):
     host = HOST
     port = PORT
     global _VERBOSE
+    _VERBOSE = False
 
     try:                                
         opts, args = getopt.getopt(argv, "hvH:P:", ["help", "verbose", "host=", "port="])
@@ -348,9 +354,11 @@ def main(argv):
         elif opt in ("-P", "--port"):
             port = arg
 
-    factory = GreenMailImapProxyServerFactory(host,port)
+    factory = ImapProxyServerFactory(host,port)
     reactor.listenSSL(port, factory, ssl.DefaultOpenSSLContextFactory('ssl/server.key', 'ssl/server.crt'))
     #SSL key and self signed cert generated following instructions at https://help.ubuntu.com/10.04/serverguide/certificates-and-security.html
+    if _VERBOSE: print "VERBOSE MODE"
+    else: print "QUIET MODE"
     print "Proxy Started"
     reactor.run()
     print "Proxy Stopped"
